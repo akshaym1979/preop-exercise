@@ -152,7 +152,7 @@ class TriageOutput(BaseModel):
 
 
 class PreparedPatientCase(BaseModel):
-    """Serialized eval case with submission payload and expected oracle output."""
+    """Serialized evaluation case bundling a submission with its expected output."""
 
     case_id: str
     submission: PatientSubmission
@@ -293,8 +293,9 @@ ANTICOAG_ALLOWLIST: frozenset[str] = frozenset({
     "edoxaban", "heparin", "enoxaparin",
 })
 
-# H&P type matcher. Each alternate captures a common synonym observed in the sample's 100+
-# unique doc type strings ("History and Physical" appears verbatim only once).
+# H&P type matcher. Real EHR systems use a wide variety of synonyms for a History
+# and Physical document (e.g. "H&P", "Hist & Phys", "Hx & Physical", "History/Physical",
+# "Pre-op H&P", "Imported: H&P (scanned)"); each alternate below covers a common form.
 _HP_TYPE_RE = re.compile(
     r"\b(?:"
     r"h\s*&\s*p"
@@ -730,7 +731,6 @@ def classify_consent(
 
     Multiplicity rule: if multiple consent-typed docs exist, prefer the most recent
     by date; ties by lower index. Docs without a parseable date sort to the end.
-    None of the 50 sample records have multiple consent-typed docs.
     """
     candidates: list[tuple[tuple[int, int, int], int, Document]] = []
     for idx, doc in enumerate(documents):
@@ -903,7 +903,9 @@ def _issue(
 def _doc_type_list(state: NormalizedState) -> str:
     """Comma-separated list of unique document types, preserved in submitter order.
 
-    Used as a grounding anchor in missing-doc issues.
+    Embedded in missing-doc issue `details` so the cited finding references
+    concrete values from the submission (e.g. naming the documents that ARE
+    present when reporting that a required one is missing).
     """
     seen: set[str] = set()
     ordered: list[str] = []
@@ -917,8 +919,10 @@ def _doc_type_list(state: NormalizedState) -> str:
 def _lab_code_list(state: NormalizedState) -> str:
     """Comma-separated unique lab codes (original, not normalized).
 
-    Used as a grounding anchor in missing-lab issues. The sample always includes
-    HBA1C (5 chars), which suffices for fuzzy grounding via strategy (b).
+    Embedded in missing-lab issue `details` so the cited finding references
+    concrete values from the submission (e.g. naming the labs that ARE present
+    when reporting that a required one is missing). This keeps the issue
+    self-evidenced rather than asserting an absence in isolation.
     """
     seen: set[str] = set()
     ordered: list[str] = []
