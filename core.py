@@ -666,16 +666,17 @@ def select_canonical_hp(
 ) -> Sourced[Document] | None:
     """Pick the canonical pre-op H&P.
 
-    H&P-typed (regex match), dated on or before `procedure_date` (when known).
-    Most recent wins; ties by lower index. If `procedure_date` is None, no date
-    filter is applied.
+    Filters by H&P type (regex match), then by date <= `procedure_date` (when
+    known), then picks the most recent. Ties broken by lower document index.
+    If `procedure_date` is None, no date filter is applied.
 
-    Some sample records also have a second "retained historical" H&P-typed doc
-    whose text is a known boilerplate marker. Date-based selection naturally
-    picks the current doc over these in multi-H&P records (the current one is
-    always newer). In the single-H&P case (e.g. case_00002) where the only doc
-    has that marker text, the oracle still treats it as the H&P and flags it
-    out-of-window - so we do too. No extra text-based filter is required.
+    Note: we do not filter by document text content (e.g. a "retained
+    historical H&P" boilerplate marker). Doing so would leave no canonical H&P
+    in records where the only available doc happens to carry such text - in
+    which case the downstream rule engine would emit a "missing H&P" finding
+    even though a document is present. Trusting the type field and relying on
+    date-based selection keeps the rule engine's judgment honest: if the doc
+    is too old, Rule 1 flags it out-of-window; if not, it stands.
     """
     candidates: list[tuple[int, date, Document]] = []
     for idx, doc in enumerate(documents):
