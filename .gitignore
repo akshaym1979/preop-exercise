@@ -31,3 +31,6 @@ dist/
 data/baseline_outputs.jsonl
 data/eval_report.json
 data/determinism_report.json
+
+# Internal-only notes (not part of submission)
+notes/analysis-journal.md
