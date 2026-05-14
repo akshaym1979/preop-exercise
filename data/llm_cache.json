@@ -1,0 +1,65 @@
+{
+  "6ff67616c482024d834a3e431e003a4fee7137d3550dc46da36921a8e108ed84": {
+    "cached_at": "2026-05-14T18:53:33Z",
+    "model": "gpt-4.1-mini",
+    "response": {
+      "adequate": false,
+      "reason": "Plan is pending finalization; no specific hold or resume instructions provided."
+    },
+    "schema_name": "PlanAdequacyResponse"
+  },
+  "8c647dc4f56e0f42746a2d8bc34fa84a217fff3e4466bb381f63620d841558f3": {
+    "cached_at": "2026-05-14T18:53:26Z",
+    "model": "gpt-4.1-mini",
+    "response": {
+      "confidence": "high",
+      "is_anticoagulant": false
+    },
+    "schema_name": "DrugClassificationResponse"
+  },
+  "a4d71ea74fbf95223bb6447d03ee1f150a0937f99dd84ef6cca2db42e32ee062": {
+    "cached_at": "2026-05-14T18:53:30Z",
+    "model": "gpt-4.1-mini",
+    "response": {
+      "confidence": "high",
+      "is_anticoagulant": false
+    },
+    "schema_name": "DrugClassificationResponse"
+  },
+  "ba790e2bfc818c530df45c729655a3ddb301259bbcf7e726ba1e65d83f6df896": {
+    "cached_at": "2026-05-14T18:53:32Z",
+    "model": "gpt-4.1-mini",
+    "response": {
+      "adequate": false,
+      "reason": "Plan lacks specific hold and resume instructions for anticoagulant."
+    },
+    "schema_name": "PlanAdequacyResponse"
+  },
+  "c643cac0103e4b911f9b78ae485c546092c802a560306f46f8b8f88d4429e73b": {
+    "cached_at": "2026-05-14T18:53:34Z",
+    "model": "gpt-4.1-mini",
+    "response": {
+      "adequate": false,
+      "reason": "Plan is pending specialist input; no specific hold or resume instructions given."
+    },
+    "schema_name": "PlanAdequacyResponse"
+  },
+  "c97e3aa30e6a2bc61a8475827d78e355148e0252c60a46e758a2dffec53ca650": {
+    "cached_at": "2026-05-14T18:53:28Z",
+    "model": "gpt-4.1-mini",
+    "response": {
+      "adequate": false,
+      "reason": "Plan defers to cardiology without specific hold/resume instructions."
+    },
+    "schema_name": "PlanAdequacyResponse"
+  },
+  "e69eb7d24e5bf88a67a451e04ce3ad98f976acb514fe08d2f83ec15489ff5a23": {
+    "cached_at": "2026-05-14T18:53:30Z",
+    "model": "gpt-4.1-mini",
+    "response": {
+      "adequate": false,
+      "reason": "No specific hold or resume timing provided for anticoagulation."
+    },
+    "schema_name": "PlanAdequacyResponse"
+  }
+}
