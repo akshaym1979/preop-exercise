@@ -2,7 +2,7 @@
 
 This file accompanies the take-home submission. The original `README.md` (build/run instructions from the exercise) is unchanged; everything below is additive.
 
-## Where to read
+## Submission contents
 
 - **`notes/design.md`** — full technical design (architecture, data model, rule-by-rule design, LLM strategy, determinism, error handling, testing, open questions).
 - **`core.py`** — the implementation. The original baseline `triage_submission` has been replaced with a hybrid (rule engine + narrow LLM extractors). All other harness scripts (`run_evals.py`, `run_baseline.py`, `view_report.py`) are unchanged.
