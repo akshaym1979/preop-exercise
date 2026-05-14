@@ -36,7 +36,6 @@ from core import (
     ConsentSignedResponse,
     ConsentStatus,
     Document,
-    DocTypeResponse,
     DrugClassificationResponse,
     LabResult,
     Medication,
@@ -288,6 +287,27 @@ class TestLabSelection:
         assert select_most_recent_lab(labs, "CBC") is None
         assert select_most_recent_lab(labs, "CMP") is None
 
+    def test_post_procedure_lab_excluded_when_pd_provided(self) -> None:
+        # T2.2 regression: a lab dated AFTER procedure_date cannot satisfy the
+        # pre-op testing requirement. Without this filter, _check_lab_window
+        # would treat it as in-window (negative days_prior < window).
+        labs = [
+            LabResult(id="1", code="CBC", effective_at="2026-02-15T08:00:00Z"),
+            LabResult(id="2", code="CBC", effective_at="2026-03-10T08:00:00Z"),  # post-procedure
+        ]
+        # procedure on 2026-03-01: only labs[0] is eligible.
+        picked = select_most_recent_lab(labs, "CBC", date(2026, 3, 1))
+        assert picked is not None and picked.value.id == "1"
+
+    def test_no_pd_argument_keeps_all_labs(self) -> None:
+        # Backwards-compatible default: omit procedure_date and no date filter is applied.
+        labs = [
+            LabResult(id="1", code="CBC", effective_at="2026-02-15T08:00:00Z"),
+            LabResult(id="2", code="CBC", effective_at="2026-03-10T08:00:00Z"),
+        ]
+        picked = select_most_recent_lab(labs, "CBC")
+        assert picked is not None and picked.value.id == "2"  # most recent overall
+
 
 class TestVitalSelection:
     def test_filters_by_type_field_not_union_member(self) -> None:
@@ -302,6 +322,45 @@ class TestVitalSelection:
         temp = select_most_recent_vital(vitals, "temperature")
         assert bp is not None and bp.source_path == "vitals[2]"
         assert temp is not None and temp.source_path == "vitals[1]"
+
+    def test_same_day_tiebreak_by_time_of_day(self) -> None:
+        # T2.3 regression: two BP readings on the same calendar day must
+        # tiebreak by time-of-day (later reading wins), not by submitter index.
+        # Otherwise a morning crisis at index 0 could win over an afternoon
+        # recheck at index 1, firing a false NOT_CLEARED.
+        vitals = [
+            BloodPressureVital(type="blood_pressure", systolic=200, diastolic=110, date="2026-02-20T08:00:00Z"),
+            BloodPressureVital(type="blood_pressure", systolic=120, diastolic=80, date="2026-02-20T20:00:00Z"),
+        ]
+        picked = select_most_recent_vital(vitals, "blood_pressure")
+        assert picked is not None and picked.source_path == "vitals[1]"
+        assert getattr(picked.value, "systolic") == 120  # the afternoon recheck
+
+    def test_bp_with_null_numerics_is_skipped(self) -> None:
+        # T2.4 regression: a BP record with both null systolic and diastolic
+        # is unusable for Rule 4 and must not be returned as the most-recent BP.
+        # If skipped, missing_required_fields will emit MISSING_REQUIRED_DATA;
+        # if returned, Rule 4 silently produces nothing.
+        vitals = [
+            BloodPressureVital(type="blood_pressure", systolic=None, diastolic=None, date="2026-02-20T08:00:00Z"),
+        ]
+        assert select_most_recent_vital(vitals, "blood_pressure") is None
+
+    def test_temp_with_null_value_is_skipped(self) -> None:
+        vitals = [
+            TemperatureVital(type="temperature", value_f=None, date="2026-02-20T08:00:00Z"),
+        ]
+        assert select_most_recent_vital(vitals, "temperature") is None
+
+    def test_bp_with_one_null_numeric_is_skipped(self) -> None:
+        # If only one of systolic/diastolic is present, the BP can't be threshold-checked.
+        vitals = [
+            BloodPressureVital(type="blood_pressure", systolic=140, diastolic=None, date="2026-02-20T08:00:00Z"),
+            BloodPressureVital(type="blood_pressure", systolic=130, diastolic=85, date="2026-02-19T08:00:00Z"),
+        ]
+        # The newer-but-incomplete vital is dropped; the older complete one wins.
+        picked = select_most_recent_vital(vitals, "blood_pressure")
+        assert picked is not None and picked.source_path == "vitals[1]"
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +456,15 @@ class TestClassifyConsent:
         consent = classify_consent(docs, model="gpt-4.1-mini")
         assert consent.document is None
         assert consent.signed is False
+
+    def test_negated_signed_phrase_is_unsigned(self, stub_openai: _StubLLM) -> None:
+        # T2.1 regression: "No signature on file" substring-matches the SIGNED
+        # keyword "signature on file" but is semantically unsigned. The
+        # negation keywords in UNSIGNED_CONSENT_KEYWORDS must catch this.
+        docs = [_doc("c", "Surgical Consent", "2026-02-25", "No signature on file currently.")]
+        consent = classify_consent(docs, model="gpt-4.1-mini")
+        assert consent.signed is False
+        assert stub_openai.calls == []  # both lists match -> keyword path resolves; no LLM call
 
 
 # ---------------------------------------------------------------------------
@@ -689,8 +757,6 @@ def test_baseline_misses_now_pass(
             return PlanAdequacyResponse(adequate=False, reason="stub")
         if schema is ConsentSignedResponse:
             return ConsentSignedResponse(signed=False, confidence="high")
-        if schema is DocTypeResponse:
-            return DocTypeResponse(role="other", confidence="high")
         raise AssertionError(f"unexpected schema {schema}")
 
     monkeypatch.setattr(core, "_openai_call", fake_openai)

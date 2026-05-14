@@ -11,7 +11,7 @@ Implementation design for the pre-op triage system in [`Cadence___Engineering_Ta
 
 - **Hybrid architecture.** Deterministic rules for mechanical operations (date math, threshold checks, schema enforcement). LLM for free-text judgment.
 - **LLM in the load-bearing path for one task: plan adequacy (Rule 3).** The policy explicitly requires judgment ("clear," "incomplete or ambiguous"). A rule of "always flag if anticoag is active" passes the sample by coincidence — every sample anticoag patient has an inadequate plan — but doesn't actually evaluate adequacy.
-- **LLM as gated fallback** for drug identification, doc-type classification, and consent signed/unsigned detection. Rules cover every case the sample exercises; fallbacks fire only when the deterministic detector declines to match.
+- **LLM as gated fallback** for drug identification and consent signed/unsigned detection. Rules cover every case the sample exercises; fallbacks fire only when the deterministic detector declines to match.
 - **Rules only** for date arithmetic, lab code normalization, vital thresholds, output construction.
 - **Determinism via content-addressed disk cache** of LLM responses, checked into the repo. First call non-deterministic; subsequent calls byte-exact. Rules are pure functions.
 - **Output built in Python, not parsed from an LLM string.** Final `TriageOutput` constructed directly; LLM only returns small typed classifications consumed by the rule engine.
@@ -57,7 +57,7 @@ Each stage is a pure function. The split between **normalizer** (derive facts wi
 **LLM enters in two ways:**
 
 - *Load-bearing*: plan adequacy on Rule 3. When the patient has an active anticoagulant and a plan-typed doc exists, the text goes to an LLM returning `{adequate: bool, reason: str}`. On the sample this fires 7 times and always returns `inadequate` — but the system is actually evaluating, not pattern-matching apixaban presence.
-- *Gated fallbacks*: drug identification, doc-type classification, consent signed/unsigned detection. Each fires only when the deterministic detector declines to match. On the sample, none fire.
+- *Gated fallbacks*: drug identification and consent signed/unsigned detection. Each fires only when the deterministic detector declines to match. On the sample, drug-class fires for `lisinopril` and `metformin` (correctly classified as non-anticoagulants); consent-signed never fires (every sample consent text matches a keyword).
 
 Every LLM invocation is cached by `sha256(model || prompt || input)`. First call non-deterministic; subsequent calls hit the cache and are byte-exact. The cache file is checked into the repo.
 
@@ -136,10 +136,6 @@ class DrugClassificationResponse(BaseModel):
     is_anticoagulant: bool
     confidence: Literal["high", "medium", "low"]
 
-class DocTypeResponse(BaseModel):
-    role: Literal["history_and_physical", "surgical_consent", "anticoag_plan", "other"]
-    confidence: Literal["high", "medium", "low"]
-
 class ConsentSignedResponse(BaseModel):
     signed: bool
     confidence: Literal["high", "medium", "low"]
@@ -180,7 +176,7 @@ Every non-`MISSING_REQUIRED_DATA` issue's `details` MUST contain at least one **
 | H&P type regex (case-insensitive) | `\b(h\s*&\s*p \| h\s+and\s+p \| h\s*/\s*p \| h\s*\+\s*p \| history\s+(?:and\|&\|/)\s+physical \| hist\s+&?\s+phys \| hx\s+&?\s+physical \| history/physical)\b` (whitespace around `\|` is for readability; implementation collapses) |
 | Plan-doc regex (case-insensitive on `type`) | `perioperative\s+medication\s+(plan\|review) \| anticoag(ulation)?\s+plan \| cardiology\s+progress\s+note\s*-\s*anticoag` |
 | Consent type matcher | Case-insensitive substring `consent` in `type`. All 50 sample records treat any `consent`-typed doc as a valid surgical consent. Production non-surgical consents (HIPAA, research, etc.) deferred to §11. |
-| Unsigned-consent keywords | `unsigned`, `awaiting signature`, `signature not yet`, `signature pending` |
+| Unsigned-consent keywords | `unsigned`, `awaiting signature`, `signature not yet`, `signature pending`, `no signature`, `not signed` (last two are negation phrases that prevent the SIGNED keyword `signature on file` from false-positive on text like *"No signature on file currently."*) |
 | Signed-consent keywords | `signed`, `signature on file`, `signed by`, `electronic consent obtained` |
 | Historical-H&P signal (not used) | The sample contains a byte-identical boilerplate `"Prior pre-op H&P retained for longitudinal chart context."` on retained historical H&P docs. Considered as a fast-filter but ultimately not implemented: date-based selection (above) picks correctly without it, and a hard filter would mis-handle records where the only available H&P happens to have this marker (e.g., case_00002). Documented here as a sample-specific signal that exists but is not relied on. |
 | Lab code normalization | Strip `LAB-` prefix; for Rule 2 matching, only consider canonical codes `{CBC, CMP}`. |
@@ -257,7 +253,6 @@ Four schema-constrained calls, all routed through a single cached helper:
 |---|---|---|
 | Plan adequacy (load-bearing) | `PlanAdequacyResponse` | Active anticoagulant + ≥1 plan-typed doc |
 | Drug class (fallback) | `DrugClassificationResponse` | Medication name doesn't match allowlist |
-| Doc type (fallback) | `DocTypeResponse` | Doc type doesn't match any role regex. NOT invoked for positive consent-substring matches. |
 | Consent signed (fallback) | `ConsentSignedResponse` | Consent doc present AND neither keyword list matches |
 
 **Cached helper:**
@@ -334,7 +329,7 @@ def canonical_json(obj) -> str:
 ## §11. Open questions & documented assumptions
 
 - **Anesthesia/Consult H&P precision.** `Pre-anesthesia H&P` and `Consult H&P` match the H&P regex. Policy is silent on whether these satisfy Rule 1; design accepts them.
-- **Typo'd doc types.** `"History & Phsyical"` (case 00002) rejected by regex; relies on LLM doc-type fallback in production.
+- **Typo'd doc types.** `"History & Phsyical"` (case 00002) is rejected by the H&P regex. Case 00002 happens to have a second H&P-typed doc that the regex does match, so the rule still operates correctly. A record where the *only* H&P-typed doc has a typo would currently report "H&P missing." Mitigation if observed: add an LLM doc-type classifier as a gated fallback when no doc matches the H&P regex; not implemented now because zero records in the sample exercise it.
 - **Free-text dates not extracted.** All date math uses structured fields (`procedure.procedure_date`, `documents[i].date`, `labs[i].effective_at`, `vitals[i].date`). Case_00000 confirms the convention: null `procedure_date` is `MISSING_REQUIRED_DATA` even when H&P text mentions a target date. Revisit if production data systematically uses free-text dates.
 - **`LAB-X` generalization** unverified for codes beyond CBC/CMP.
 - **Plan-adequacy "adequate" branch untested.** Sample has zero clearly-adequate anticoag plans; hidden test would be the first real exercise.

@@ -183,11 +183,21 @@ def to_utc_date(s: str) -> date:
     Used uniformly across rules so date math is timezone-correct on the day
     boundary; cf. design doc §2 + §6.
     """
+    return to_utc_datetime(s).date()
+
+
+def to_utc_datetime(s: str) -> datetime:
+    """Parse an ISO 8601 date or datetime string to a UTC `datetime`.
+
+    Used where time-of-day matters (e.g. tiebreaking two vital readings on the
+    same calendar day). Naive datetimes are treated as UTC; bare dates resolve
+    to midnight UTC.
+    """
     parsed: str = s.replace("Z", "+00:00") if s.endswith("Z") else s
     dt = datetime.fromisoformat(parsed)
     if dt.tzinfo is None:
-        return dt.date()
-    return dt.astimezone(timezone.utc).date()
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 # -------------------------
@@ -210,18 +220,6 @@ class DrugClassificationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     is_anticoagulant: bool
-    confidence: Literal["high", "medium", "low"]
-
-
-class DocTypeResponse(BaseModel):
-    """Classification of a clinical document type into a policy role.
-
-    Used as fallback when the deterministic regex matchers don't recognize the type string.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    role: Literal["history_and_physical", "surgical_consent", "anticoag_plan", "other"]
     confidence: Literal["high", "medium", "low"]
 
 
@@ -322,6 +320,11 @@ UNSIGNED_CONSENT_KEYWORDS: tuple[str, ...] = (
     "awaiting signature",
     "signature not yet",
     "signature pending",
+    # Negation phrases: prevent the SIGNED keyword set from falsely matching
+    # text like "No signature on file currently." (where `signature on file`
+    # is a substring but the sentence is negated).
+    "no signature",
+    "not signed",
 )
 
 SIGNED_CONSENT_KEYWORDS: tuple[str, ...] = (
@@ -541,24 +544,6 @@ If the name is unfamiliar or could plausibly be either, return confidence=low.
 The caller treats confidence=low as a decline and routes to the safer (flag) branch.
 """
 
-DOC_TYPE_PROMPT = """\
-You are classifying a clinical document type string into one of four roles:
-  - history_and_physical: a pre-operative History and Physical (H&P) document
-  - surgical_consent: a signed surgical consent for the planned procedure
-  - anticoag_plan: a perioperative anticoagulation management plan
-  - other: anything else (nursing intake, anesthesia notes, follow-up notes, etc.)
-
-Examples:
-  - "History and Physical Examination" -> history_and_physical
-  - "Pre-op H&P (signed)" -> history_and_physical
-  - "Surgical Consent" -> surgical_consent
-  - "Consent Counseling Note" -> surgical_consent
-  - "Perioperative Medication Plan" -> anticoag_plan
-  - "Pre-op Nursing Intake" -> other
-
-Return confidence=low if the type string is ambiguous.
-"""
-
 CONSENT_SIGNED_PROMPT = """\
 You are determining whether a consent document's text indicates the consent was signed
 by the patient.
@@ -591,10 +576,6 @@ def classify_drug(medication_name: str, *, model: str) -> DrugClassificationResp
     return cached_call(DrugClassificationResponse, DRUG_CLASS_PROMPT, medication_name, model=model)
 
 
-def classify_doc_type(doc_type_string: str, *, model: str) -> DocTypeResponse:
-    return cached_call(DocTypeResponse, DOC_TYPE_PROMPT, doc_type_string, model=model)
-
-
 def classify_consent_signed(consent_text: str, *, model: str) -> ConsentSignedResponse:
     return cached_call(ConsentSignedResponse, CONSENT_SIGNED_PROMPT, consent_text, model=model)
 
@@ -610,6 +591,16 @@ def _safe_to_utc_date(value: str | None) -> date | None:
         return None
     try:
         return to_utc_date(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_to_utc_datetime(value: str | None) -> datetime | None:
+    """Parse to a UTC datetime; return None on missing or malformed input."""
+    if not value:
+        return None
+    try:
+        return to_utc_datetime(value)
     except (ValueError, TypeError):
         return None
 
@@ -751,9 +742,17 @@ def classify_consent(
 
 
 def select_most_recent_lab(
-    labs: list[LabResult], canonical_code: str,
+    labs: list[LabResult],
+    canonical_code: str,
+    procedure_date: date | None = None,
 ) -> Sourced[LabResult] | None:
-    """Pick the most recent lab whose normalized code equals `canonical_code` (e.g. "CBC", "CMP")."""
+    """Pick the most recent lab whose normalized code equals `canonical_code`.
+
+    If `procedure_date` is provided, labs dated AFTER the procedure are excluded
+    (a post-procedure CBC cannot satisfy a pre-op testing requirement). This
+    mirrors the H&P selection's filter and keeps Rule 2's "missing CBC" vs.
+    "stale CBC" findings semantically distinct.
+    """
     candidates: list[tuple[int, date, LabResult]] = []
     for idx, lab in enumerate(labs):
         if not lab.code:
@@ -763,6 +762,8 @@ def select_most_recent_lab(
         d = _safe_to_utc_date(lab.effective_at)
         if d is None:
             continue
+        if procedure_date is not None and d > procedure_date:
+            continue
         candidates.append((idx, d, lab))
     picked = _pick_most_recent(candidates)
     if picked is None:
@@ -771,26 +772,52 @@ def select_most_recent_lab(
     return Sourced(lab, f"labs[{idx}]")
 
 
+def _vital_has_required_numerics(vital: Any, vital_type: str) -> bool:
+    """Whether the vital has the numeric field(s) Rule 4 will threshold-check.
+
+    A blood-pressure vital missing systolic or diastolic, or a temperature vital
+    missing value_f, is unusable for the acute-safety check. We treat such
+    records as if the vital weren't present at all - so `most_recent_*` is None
+    and `missing_required_fields` emits the right `MISSING_REQUIRED_DATA` issue.
+    """
+    if vital_type == "blood_pressure":
+        sbp = getattr(vital, "systolic", None)
+        dbp = getattr(vital, "diastolic", None)
+        return isinstance(sbp, (int, float)) and isinstance(dbp, (int, float))
+    if vital_type == "temperature":
+        return isinstance(getattr(vital, "value_f", None), (int, float))
+    return False
+
+
 def select_most_recent_vital(
     vitals: list[Any], vital_type: str,
 ) -> Sourced[Any] | None:
     """Most recent vital whose `type` field equals `vital_type` ("blood_pressure" or "temperature").
 
     Filters by the `type` field rather than Pydantic union membership, since `Vital` is
-    a non-discriminated union and parsing can resolve unexpectedly.
+    a non-discriminated union and parsing can resolve unexpectedly. Also requires
+    the numeric fields Rule 4 needs to be present - vitals with null numerics are
+    treated as absent so the missing-data path fires for them.
+
+    Sort key is the full UTC datetime so two readings on the same calendar day
+    tiebreak by time of day (later reading wins), with submitter index as the
+    final tiebreaker for true datetime ties.
     """
-    candidates: list[tuple[int, date, Any]] = []
+    candidates: list[tuple[int, datetime, Any]] = []
     for idx, vital in enumerate(vitals):
         if getattr(vital, "type", None) != vital_type:
             continue
-        d = _safe_to_utc_date(getattr(vital, "date", None))
-        if d is None:
+        if not _vital_has_required_numerics(vital, vital_type):
             continue
-        candidates.append((idx, d, vital))
-    picked = _pick_most_recent(candidates)
-    if picked is None:
+        dt = _safe_to_utc_datetime(getattr(vital, "date", None))
+        if dt is None:
+            continue
+        candidates.append((idx, dt, vital))
+    if not candidates:
         return None
-    idx, _, vital = picked
+    # Most recent datetime first; ties by lower index.
+    candidates.sort(key=lambda x: (-x[1].timestamp(), x[0]))
+    idx, _, vital = candidates[0]
     return Sourced(vital, f"vitals[{idx}]")
 
 
@@ -837,13 +864,11 @@ def normalize(submission: PatientSubmission, *, model: str) -> NormalizedState:
     vitals = list(submission.vitals or [])
     medications = list(submission.medications or [])
 
-    canonical_hp = select_canonical_hp(
-        documents,
-        procedure_date.value if procedure_date else None,
-    )
+    pd_value = procedure_date.value if procedure_date else None
+    canonical_hp = select_canonical_hp(documents, pd_value)
     consent = classify_consent(documents, model=model)
-    most_recent_cbc = select_most_recent_lab(labs, "CBC")
-    most_recent_cmp = select_most_recent_lab(labs, "CMP")
+    most_recent_cbc = select_most_recent_lab(labs, "CBC", pd_value)
+    most_recent_cmp = select_most_recent_lab(labs, "CMP", pd_value)
     most_recent_bp = select_most_recent_vital(vitals, "blood_pressure")
     most_recent_temp = select_most_recent_vital(vitals, "temperature")
 
