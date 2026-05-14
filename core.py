@@ -330,10 +330,6 @@ SIGNED_CONSENT_KEYWORDS: tuple[str, ...] = (
     "electronic consent obtained",
 )
 
-# Boilerplate text marking a document as a retained historical H&P. Sample-specific
-# (synthetic-data artifact); the primary canonical-H&P signal is the document date.
-RETAINED_HP_MARKER = "Prior pre-op H&P retained for longitudinal chart context."
-
 LAB_CODE_PREFIX = "LAB-"
 RECOGNIZED_LAB_CODES: frozenset[str] = frozenset({"CBC", "CMP"})
 
@@ -674,12 +670,12 @@ def select_canonical_hp(
     Most recent wins; ties by lower index. If `procedure_date` is None, no date
     filter is applied.
 
-    The retained-historical text marker (RETAINED_HP_MARKER) is intentionally
-    NOT a hard filter. In multi-H&P records, the current (non-retained) doc is
-    always more recent than the retained ones, so date-based selection picks
-    correctly without help. In single-H&P records where the only doc has the
-    retained marker (e.g. case_00002), the oracle still treats it as the H&P
-    and flags it out-of-window - so we do too.
+    Some sample records also have a second "retained historical" H&P-typed doc
+    whose text is a known boilerplate marker. Date-based selection naturally
+    picks the current doc over these in multi-H&P records (the current one is
+    always newer). In the single-H&P case (e.g. case_00002) where the only doc
+    has that marker text, the oracle still treats it as the H&P and flags it
+    out-of-window - so we do too. No extra text-based filter is required.
     """
     candidates: list[tuple[int, date, Document]] = []
     for idx, doc in enumerate(documents):

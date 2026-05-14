@@ -182,7 +182,7 @@ Every non-`MISSING_REQUIRED_DATA` issue's `details` MUST contain at least one **
 | Consent type matcher | Case-insensitive substring `consent` in `type`. All 50 sample records treat any `consent`-typed doc as a valid surgical consent. Production non-surgical consents (HIPAA, research, etc.) deferred to §11. |
 | Unsigned-consent keywords | `unsigned`, `awaiting signature`, `signature not yet`, `signature pending` |
 | Signed-consent keywords | `signed`, `signature on file`, `signed by`, `electronic consent obtained` |
-| Historical-H&P fast-filter (optional) | Skip docs whose `text` starts with `"Prior pre-op H&P retained for longitudinal chart context."` — synthetic-data artifact. Date-based selection (above) is the primary rule. |
+| Historical-H&P signal (not used) | The sample contains a byte-identical boilerplate `"Prior pre-op H&P retained for longitudinal chart context."` on retained historical H&P docs. Considered as a fast-filter but ultimately not implemented: date-based selection (above) picks correctly without it, and a hard filter would mis-handle records where the only available H&P happens to have this marker (e.g., case_00002). Documented here as a sample-specific signal that exists but is not relied on. |
 | Lab code normalization | Strip `LAB-` prefix; for Rule 2 matching, only consider canonical codes `{CBC, CMP}`. |
 | Date normalization | `to_utc_date(s)` accepts ISO 8601 dates or datetimes (with `Z` or `+/-HH:MM` offsets); naive datetimes assumed UTC. Date math: `(to_utc_date(d1) - to_utc_date(d2)).days`. |
 
