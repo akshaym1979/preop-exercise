@@ -6,13 +6,13 @@ This file accompanies the take-home submission. The original `README.md` (build/
 
 - **`notes/design.md`** — full technical design (architecture, data model, rule-by-rule design, LLM strategy, determinism, error handling, testing, open questions).
 - **`core.py`** — the implementation. The original baseline `triage_submission` has been replaced with a hybrid (rule engine + narrow LLM extractors). All other harness scripts (`run_evals.py`, `run_baseline.py`, `view_report.py`) are unchanged.
-- **`test_core.py`** — unit and regression tests (79 tests; run with `uv run test_core.py` or `pytest test_core.py`).
+- **`test_core.py`** — unit and regression tests (86 tests; run with `uv run test_core.py` or `pytest test_core.py`).
 - **`data/llm_cache.json`** — checked-in LLM response cache (7 entries from a warmed baseline run). See "Determinism" below for why it's committed.
 
 ## What changed in `core.py`
 
 - Removed the baseline `BASELINE_SYSTEM_PROMPT`, `build_user_prompt`, and the LLM-only `triage_submission`.
-- Added: type predicates, lookup tables (anticoagulant allowlist, regexes, consent-keyword sets), a content-hashed disk cache, four narrow LLM extractors (plan adequacy, drug class, doc type, consent signed), the normalizer, the rule engine, and a new `triage_submission` that wires them together.
+- Added: type predicates, lookup tables (anticoagulant allowlist, regexes, consent-keyword sets), a content-hashed disk cache, three narrow LLM extractors (plan adequacy, drug class, consent signed), the normalizer, the rule engine, and a new `triage_submission` that wires them together.
 - The wire types (`PatientSubmission`, `TriageOutput`, `TriageIssue`, etc.) and `triage_output_json_schema()` are kept as the harness imports them.
 
 ## Run instructions (unchanged from `README.md`)
@@ -55,7 +55,7 @@ make baseline
 ## Where LLM is used (and where it isn't)
 
 - **Load-bearing**: plan adequacy assessment (Rule 3). The policy explicitly requires a judgment call ("clear," "incomplete or ambiguous"), and there's no mechanical way to determine adequacy from a free-text plan document. Fires on the 7 apixaban patients in the sample.
-- **Gated fallbacks** (fire only when the deterministic detector declines): drug classification, doc-type classification, consent signed/unsigned classification. On the sample, only drug classification fires (for lisinopril and metformin — both correctly classified as non-anticoagulants).
+- **Gated fallbacks** (fire only when the deterministic detector declines): drug classification, consent signed/unsigned classification. On the sample, only drug classification fires (for lisinopril and metformin — both correctly classified as non-anticoagulants).
 - **Rules only** for: date arithmetic, lab code normalization, vital threshold checks, output construction, schema enforcement.
 
 Every LLM call uses OpenAI Responses API with `strict: true` JSON-schema output (eliminating the parse-failure class that hit the baseline on case_00034). Each response is validated against a small Pydantic schema before being consumed by the rule engine.

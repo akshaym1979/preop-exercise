@@ -318,7 +318,7 @@ def canonical_json(obj) -> str:
   - `issue_categories_match_oracle`: 100% (categories specified by construction per §6)
   - `json_schema_valid`: 100% (output built directly)
   - `issues_value_grounding`: ≥95% (grounding-anchor column embeds a value for every non-missing issue; production-edge cases like 3-char-only lab codes may leave specific records vulnerable)
-  - Aggregate (`run_evals.py:40`): `(1.0 + 1.0 + 1.0 + 0.5 × 0.95) / 3.5 ≈ 99%`
+  - Aggregate (`run_evals.py:40`): `(1.0 + 1.0 + 1.0 + 0.5 × g) / 3.5` where g is the grounding rate. With g≥0.95 the aggregate is ≥99%; on the 50-record sample all four metrics hit 100% for an aggregate of 100%.
 
   The 5 baseline misses (00007, 00025, 00034, 00040, 00048) become regression cases.
 - **Determinism via harness**: `make determinism` 10× on case_00000 → `exact_output_match_pct = 100`.
@@ -337,3 +337,5 @@ def canonical_json(obj) -> str:
 - **Cache growth unbounded.** Fine at current scale; TTL/size cap needed if it grew to thousands.
 - **Provider lock-in** to OpenAI `strict: true` schema export; localized to one helper.
 - **Non-surgical consent types** (HIPAA, research, photography, transfusion): substring `consent` matcher would over-accept. None in sample. Mitigation if observed: extend doc-type LLM fallback with a "consent kind" branch.
+- **Grounding fragility on near-empty collections.** Two narrow cases where the harness's `issues_value_grounding` check could fail under specific shapes that don't appear in the sample: (a) a submission with `documents=[]` emitting "missing H&P" leaves no doc-section value for fuzzy-strategy-(b) to find; (b) a HIGH-risk submission whose `labs` collection contains only the 3-character code `CBC` (no `HBA1C`, no `LAB-`-prefixed code) and is missing CMP leaves no ≥4-char anchor in the labs section. Every sample record has either `HBA1C` (5 chars) or a `LAB-`-prefixed code, so neither case fires. Mitigation if observed: extend the inventory string to include the procedure date or other reliably-long ID; not worth the code complexity until evidence demands it.
+- **H&P with unparseable `date`.** `select_canonical_hp` silently drops documents whose `date` string can't be parsed by `to_utc_date`. A record where the only H&P-typed doc has a malformed date would report "H&P missing" rather than surfacing the parse failure as a separate signal. Defensible (we trust Pydantic to reject most malformed inputs at the boundary), but worth knowing about.

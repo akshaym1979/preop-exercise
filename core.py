@@ -3,8 +3,9 @@
 Hybrid architecture: a deterministic rule engine handles mechanical operations
 (date math, threshold checks, schema enforcement); narrow LLM extractors handle
 the work that requires reading free text (plan adequacy in the load-bearing
-path; drug/doc-type/consent classification as gated fallbacks). LLM responses
-are cached on disk by content hash for byte-stable replay.
+path; drug classification and consent signed/unsigned classification as gated
+fallbacks). LLM responses are cached on disk by content hash for byte-stable
+replay.
 
 See `notes/design.md` for the full design.
 """
@@ -1180,6 +1181,12 @@ def rule_4_acute_safety(state: NormalizedState) -> list[TriageIssue]:
     """Rule 4 - Acute safety exclusions, using only the most recent reading of each type."""
     issues: list[TriageIssue] = []
 
+    def _vital_origin(v: Any) -> str:
+        """Render a 'on <date> from <source>' fragment, omitting `from ...` if source is empty."""
+        d = getattr(v, "date", "") or ""
+        s = getattr(v, "source", "") or ""
+        return f"on {d}" + (f" from {s}" if s else "")
+
     bp = state.most_recent_bp
     if bp is not None:
         v = bp.value
@@ -1187,13 +1194,11 @@ def rule_4_acute_safety(state: NormalizedState) -> list[TriageIssue]:
         dbp = getattr(v, "diastolic", None)
         if (isinstance(sbp, (int, float)) and sbp >= _SBP_THRESHOLD) or \
            (isinstance(dbp, (int, float)) and dbp >= _DBP_THRESHOLD):
-            v_date = getattr(v, "date", "") or ""
-            v_source = getattr(v, "source", "") or ""
             issues.append(_issue(
                 "ACUTE_SAFETY_EXCLUSION",
                 "Blood pressure meets exclusion threshold",
                 bp.source_path,
-                f"latest BP on {v_date} from {v_source}: systolic={sbp}, diastolic={dbp}; "
+                f"latest BP {_vital_origin(v)}: systolic={sbp}, diastolic={dbp}; "
                 f"threshold systolic>={_SBP_THRESHOLD} or diastolic>={_DBP_THRESHOLD}",
             ))
 
@@ -1202,13 +1207,11 @@ def rule_4_acute_safety(state: NormalizedState) -> list[TriageIssue]:
         v = temp.value
         value_f = getattr(v, "value_f", None)
         if isinstance(value_f, (int, float)) and value_f > _TEMP_F_THRESHOLD:
-            v_date = getattr(v, "date", "") or ""
-            v_source = getattr(v, "source", "") or ""
             issues.append(_issue(
                 "ACUTE_SAFETY_EXCLUSION",
                 "Temperature exceeds exclusion threshold",
                 temp.source_path,
-                f"latest temperature on {v_date} from {v_source}: value_f={value_f}; "
+                f"latest temperature {_vital_origin(v)}: value_f={value_f}; "
                 f"threshold is > {_TEMP_F_THRESHOLD}",
             ))
 
